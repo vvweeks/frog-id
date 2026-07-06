@@ -19,7 +19,20 @@ if not IN_COLAB:
     load_dotenv()  # reads ./.env if present; no-op otherwise
 
 if IN_COLAB:
-    drive.mount('/content/drive')
+    # Scripts run via `!python -m ...` execute as subprocesses with no
+    # live kernel, so they can't complete Drive's interactive auth flow -
+    # skip calling mount() if it's already mounted (done from an actual
+    # notebook cell), and fail with a clear message if it isn't.
+    if not os.path.ismount('/content/drive'):
+        try:
+            drive.mount('/content/drive')
+        except Exception as e:
+            raise RuntimeError(
+                "Google Drive isn't mounted. Run `from google.colab import "
+                "drive; drive.mount('/content/drive')` in a notebook cell "
+                "first (this needs a live kernel to complete), then re-run "
+                "this script."
+            ) from e
     DRIVE_SAVE_DIR = '/content/drive/MyDrive/6575_Deep_Learning'
 else:
     DRIVE_SAVE_DIR = os.environ.get('FROG_ID_SAVE_DIR', './6575_Deep_Learning')
