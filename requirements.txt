@@ -1,5 +1,6 @@
 torch
 torchaudio
+torchcodec  # also requires FFmpeg's shared libs on the system (e.g. `brew install ffmpeg`)
 torchvision
 birdnet[and-cuda]
 soundfile
