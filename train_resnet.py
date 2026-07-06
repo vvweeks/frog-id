@@ -23,6 +23,12 @@ def train_model():
 
     train_transform_dataset = FrogCallDataset(TRAIN_DIR, SPECIES_MAP, is_train=True)
     val_transform_dataset = FrogCallDataset(TRAIN_DIR, SPECIES_MAP, is_train=False)
+    # Both scan TRAIN_DIR independently via os.listdir(); force identical
+    # ordering so train_idx/val_idx (computed once, below) select the same
+    # files from each rather than relying on directory-listing order to
+    # coincidentally match between the two separate scans.
+    val_transform_dataset.file_paths = train_transform_dataset.file_paths
+    val_transform_dataset.labels = train_transform_dataset.labels
 
     if len(train_transform_dataset) == 0:
         raise RuntimeError("Training dataset is empty.")

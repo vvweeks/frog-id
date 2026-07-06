@@ -3,6 +3,7 @@ train_birdnet.py - Training loop for the BirdNET-embedding classifier
 head. Requires build_embedding_cache() to have been run first.
 """
 import os
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -13,7 +14,7 @@ from config import (
     TRAIN_DIR, TEST_DIR, SPECIES_MAP, BATCH_SIZE,
     VAL_SPLIT, WEIGHT_DECAY, RANDOM_SEED, DRIVE_SAVE_DIR,
 )
-from features.birdnet_embeddings import BirdNETEmbeddingDataset, EMBEDDING_DIM
+from features.birdnet_embeddings import BirdNETEmbeddingDataset
 from models.birdnet_head import get_birdnet_classifier_head
 
 
@@ -41,7 +42,10 @@ def train_birdnet_classifier(epochs=50, lr=1e-3):
     val_loader = DataLoader(val_subset, batch_size=BATCH_SIZE, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-    embedding_dim = EMBEDDING_DIM or 1024  # falls back to 1024 (BirdNET v2.4) if sanity check wasn't run
+    # build_embeddings.py runs in a separate process, so its EMBEDDING_DIM
+    # can't be imported here - read the true dimension off a real cached
+    # embedding instead of trusting a hardcoded fallback.
+    embedding_dim = np.load(full_train_dataset.embedding_paths[0]).shape[0]
     model = get_birdnet_classifier_head(embedding_dim=embedding_dim).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)

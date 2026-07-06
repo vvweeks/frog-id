@@ -6,6 +6,7 @@ import os
 import random
 import numpy as np
 import torch
+from dotenv import load_dotenv
 
 # --- Environment / storage ---
 try:
@@ -13,6 +14,9 @@ try:
     IN_COLAB = True
 except ImportError:
     IN_COLAB = False
+
+if not IN_COLAB:
+    load_dotenv()  # reads ./.env if present; no-op otherwise
 
 if IN_COLAB:
     drive.mount('/content/drive')

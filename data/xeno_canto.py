@@ -49,12 +49,15 @@ def _download_xc_recordings(recordings, out_dir, limit):
         file_name = os.path.join(out_dir, f"{rec_id}.mp3")
         if os.path.exists(file_name):
             continue
-        res = requests.get(file_url, headers={'User-Agent': 'Mozilla/5.0'})
-        content_type = res.headers.get('Content-Type', '')
-        if res.status_code == 200 and (content_type.startswith('audio') or content_type == 'application/octet-stream'):
-            with open(file_name, 'wb') as f:
-                f.write(res.content)
-            downloaded += 1
+        try:
+            res = requests.get(file_url, headers={'User-Agent': 'Mozilla/5.0'})
+            content_type = res.headers.get('Content-Type', '')
+            if res.status_code == 200 and (content_type.startswith('audio') or content_type == 'application/octet-stream'):
+                with open(file_name, 'wb') as f:
+                    f.write(res.content)
+                downloaded += 1
+        except requests.RequestException as e:
+            print(f"  [Xeno-canto] download failed for {rec_id}: {e}")
         time.sleep(0.5)
     return downloaded
 

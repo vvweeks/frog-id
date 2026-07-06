@@ -24,37 +24,41 @@ def _fetch_and_download_inat(sci_name, quality_grade, out_dir, limit):
         }
         try:
             resp = requests.get(INAT_BASE_URL, params=params, headers=INAT_HEADERS)
-            if resp.status_code != 200:
+        except requests.RequestException as e:
+            print(f"  [iNaturalist] request failed for '{sci_name}' page {page}: {e}")
+            break
+        if resp.status_code != 200:
+            break
+        results = resp.json().get('results', [])
+        if not results:
+            break
+        for obs in results:
+            if downloaded >= limit:
                 break
-            results = resp.json().get('results', [])
-            if not results:
-                break
-            for obs in results:
+            for sound in obs.get('sounds', []):
                 if downloaded >= limit:
                     break
-                for sound in obs.get('sounds', []):
-                    if downloaded >= limit:
-                        break
-                    stem = f"inat_{sound.get('id')}"
-                    if stem in CORRUPT_FILE_IDS:
-                        continue  # known-corrupt, skip permanently
-                    file_url = sound.get('file_url')
-                    if not file_url:
-                        continue
-                    file_name = os.path.join(out_dir, f"{stem}.mp3")
-                    if os.path.exists(file_name):
-                        continue
+                stem = f"inat_{sound.get('id')}"
+                if stem in CORRUPT_FILE_IDS:
+                    continue  # known-corrupt, skip permanently
+                file_url = sound.get('file_url')
+                if not file_url:
+                    continue
+                file_name = os.path.join(out_dir, f"{stem}.mp3")
+                if os.path.exists(file_name):
+                    continue
+                try:
                     audio_resp = requests.get(file_url, headers=INAT_HEADERS)
                     content_type = audio_resp.headers.get('Content-Type', '')
                     if audio_resp.status_code == 200 and (content_type.startswith('audio') or content_type == 'application/octet-stream'):
                         with open(file_name, 'wb') as f:
                             f.write(audio_resp.content)
                         downloaded += 1
-                    time.sleep(1.0)
-            page += 1
-            time.sleep(1.0)
-        except Exception:
-            break
+                except requests.RequestException as e:
+                    print(f"  [iNaturalist] download failed for {stem}: {e}")
+                time.sleep(1.0)
+        page += 1
+        time.sleep(1.0)
     return downloaded
 
 
