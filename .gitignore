@@ -6,5 +6,5 @@ __pycache__/
 6575_Deep_Learning/
 .ipynb_checkpoints/
 .DS_Store
-.claude/settings.local.json
+.claude/
 .venv/
