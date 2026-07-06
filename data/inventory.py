@@ -73,7 +73,10 @@ def print_dataset_inventory(val_split=None):
     try:
         from IPython.display import display
         display(df)
-    except ImportError:
+    except Exception:
+        # IPython being importable doesn't guarantee a live kernel to
+        # display through (e.g. when run via `!python -m ...`, which
+        # executes as a subprocess outside the notebook's kernel).
         print(df.to_string(index=False))
 
     print(f"\n--- Totals (Est. Val based on val_split={effective_val_split:.0%}) ---")
