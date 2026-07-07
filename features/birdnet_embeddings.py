@@ -127,6 +127,8 @@ class BirdNETEmbeddingDataset(Dataset):
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(class_map.keys())}
         self.embedding_paths = []
         self.labels = []
+        self.mean = None   # set via set_normalization() with TRAIN stats
+        self.std = None
 
         for r in Manifest.load().for_split(split):
             species = r["species"]
@@ -139,9 +141,17 @@ class BirdNETEmbeddingDataset(Dataset):
                     self.embedding_paths.append(cache_path)
                     self.labels.append(self.class_to_idx[species])
 
+    def set_normalization(self, mean, std):
+        """Standardize embeddings with stats fit on the TRAIN split (fit on
+        train, apply to all - no val/test leakage)."""
+        self.mean = mean.astype(np.float32)
+        self.std = std.astype(np.float32)
+
     def __len__(self):
         return len(self.embedding_paths)
 
     def __getitem__(self, idx):
         embedding = np.load(self.embedding_paths[idx]).astype(np.float32)
+        if self.mean is not None:
+            embedding = (embedding - self.mean) / self.std
         return torch.from_numpy(embedding), self.labels[idx]

@@ -140,6 +140,11 @@ class FrogCallDataset(Dataset):
         mel_spec = self.mel_transform(waveform)
         mel_spec = self.db_transform(mel_spec)
 
+        # Per-instance standardization: gives the ImageNet-pretrained ResNet a
+        # consistent input scale (raw dB values ~[-80, 0] are far from what its
+        # filters expect), and puts SpecAugment's zero-fill masks at ~the mean.
+        mel_spec = (mel_spec - mel_spec.mean()) / (mel_spec.std() + 1e-6)
+
         if self.is_train:
             mel_spec = self.freq_mask(mel_spec)
             mel_spec = self.time_mask(mel_spec)

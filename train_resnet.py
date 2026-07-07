@@ -9,11 +9,12 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from config import (
-    SPECIES_MAP, BATCH_SIZE, EPOCHS, LEARNING_RATE,
+    SPECIES_MAP, NUM_CLASSES, BATCH_SIZE, EPOCHS, LEARNING_RATE,
     BACKBONE_LR_MULT, WEIGHT_DECAY, CHECKPOINT_DIR,
 )
 from features.spectrogram_dataset import FrogCallDataset
 from models.resnet_transfer import get_frog_model, freeze_bn_stats
+from train_utils import compute_class_weights
 
 
 def train_model(run_id=None, early_stop_patience=5):
@@ -36,7 +37,8 @@ def train_model(run_id=None, early_stop_patience=5):
     print(f"Train: {len(train_dataset)} | Val: {len(val_dataset)} | Test: {len(test_dataset)}")
 
     model = get_frog_model().to(device)
-    criterion = nn.CrossEntropyLoss()
+    class_weights = compute_class_weights(train_dataset.labels, NUM_CLASSES).to(device)
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam([
         {'params': model.layer4.parameters(), 'lr': LEARNING_RATE * BACKBONE_LR_MULT},
         {'params': model.fc.parameters(), 'lr': LEARNING_RATE},

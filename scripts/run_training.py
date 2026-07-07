@@ -132,6 +132,8 @@ if __name__ == "__main__":
                         help="Short human-friendly label for this run (defaults to run_id).")
     parser.add_argument("--note", default=None,
                         help="What's different about this run (defaults to the latest git commit message).")
+    parser.add_argument("--head", choices=["mlp", "linear"], default="mlp",
+                        help="BirdNET classifier head: mlp (default) or a linear probe.")
     args = parser.parse_args()
     note = args.note or get_git_commit_message()
 
@@ -155,10 +157,10 @@ if __name__ == "__main__":
         run_id = make_run_id("birdnet_head")
         train_losses, val_losses, val_accuracies, final_test_acc, checkpoint_path, early_stopped = (
             train_birdnet_classifier(epochs=birdnet_epochs, lr=birdnet_lr, run_id=run_id,
-                                      early_stop_patience=EARLY_STOP_PATIENCE)
+                                      early_stop_patience=EARLY_STOP_PATIENCE, head_type=args.head)
         )
         hyperparams = {"epochs": birdnet_epochs, "lr": birdnet_lr,
-                       "early_stop_patience": EARLY_STOP_PATIENCE}
+                       "early_stop_patience": EARLY_STOP_PATIENCE, "head_type": args.head}
         save_results(run_id, "birdnet_head", train_losses, val_losses, val_accuracies, final_test_acc,
                      hyperparams, checkpoint_path, args.nickname, note, early_stopped)
         plot_results(train_losses, val_losses, val_accuracies, final_test_acc, "BirdNET-Embedding", run_id)

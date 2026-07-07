@@ -10,13 +10,14 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from config import (
-    SPECIES_MAP, BATCH_SIZE, WEIGHT_DECAY, CHECKPOINT_DIR,
+    SPECIES_MAP, NUM_CLASSES, BATCH_SIZE, WEIGHT_DECAY, CHECKPOINT_DIR,
 )
 from features.birdnet_embeddings import BirdNETEmbeddingDataset
 from models.birdnet_head import get_birdnet_classifier_head
+from train_utils import compute_class_weights
 
 
-def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None, early_stop_patience=5):
+def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None, early_stop_patience=5, head_type="mlp"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using Device: {device}")
 
@@ -29,18 +30,24 @@ def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None, early_stop_patienc
         raise RuntimeError("No cached train embeddings found - run build_embeddings "
                            "and make_split first.")
 
+    # Standardize embeddings using TRAIN stats only (fit on train, apply to
+    # all - no val/test leakage). Helps a linear/MLP head on frozen features.
+    train_embs = np.stack([np.load(p) for p in train_dataset.embedding_paths]).astype(np.float32)
+    emb_mean = train_embs.mean(axis=0)
+    emb_std = train_embs.std(axis=0) + 1e-6
+    for ds in (train_dataset, val_dataset, test_dataset):
+        ds.set_normalization(emb_mean, emb_std)
+
     print(f"Train: {len(train_dataset)} | Val: {len(val_dataset)} | Test: {len(test_dataset)}")
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-    # build_embeddings.py runs in a separate process, so its EMBEDDING_DIM
-    # can't be imported here - read the true dimension off a real cached
-    # embedding instead of trusting a hardcoded fallback.
-    embedding_dim = np.load(train_dataset.embedding_paths[0]).shape[0]
-    model = get_birdnet_classifier_head(embedding_dim=embedding_dim).to(device)
-    criterion = nn.CrossEntropyLoss()
+    embedding_dim = train_embs.shape[1]
+    model = get_birdnet_classifier_head(embedding_dim=embedding_dim, head_type=head_type).to(device)
+    class_weights = compute_class_weights(train_dataset.labels, NUM_CLASSES).to(device)
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
