@@ -39,11 +39,19 @@ else:
 
 os.makedirs(DRIVE_SAVE_DIR, exist_ok=True)
 
-DATA_DIR = os.path.join(DRIVE_SAVE_DIR, "ct_frog_dataset")
+# Single shareable folder holding everything this project produces
+# (data, embeddings, checkpoints, results) - kept separate from
+# DRIVE_SAVE_DIR's other contents (e.g. the frog-id/ code checkout, and
+# any unrelated coursework files living alongside it) so it can be
+# shared as one unit.
+PROJECT_DIR = os.path.join(DRIVE_SAVE_DIR, "frog_id_outputs")
+
+DATA_DIR = os.path.join(PROJECT_DIR, "ct_frog_dataset")
 TRAIN_DIR = os.path.join(DATA_DIR, "train")
 TEST_DIR = os.path.join(DATA_DIR, "test")
 EMBEDDING_CACHE_DIR = os.path.join(DATA_DIR, "birdnet_embeddings")
-CHECKPOINT_DIR = os.path.join(DRIVE_SAVE_DIR, "checkpoints")
+CHECKPOINT_DIR = os.path.join(PROJECT_DIR, "checkpoints")
+RESULTS_DIR = os.path.join(PROJECT_DIR, "results")
 
 # --- Audio / preprocessing ---
 SAMPLE_RATE = 22050

@@ -14,9 +14,7 @@ from datetime import datetime
 
 import matplotlib.pyplot as plt
 
-from config import DRIVE_SAVE_DIR
-
-RESULTS_DIR = os.path.join(DRIVE_SAVE_DIR, "results")
+from config import RESULTS_DIR
 
 
 def get_git_commit_hash():
