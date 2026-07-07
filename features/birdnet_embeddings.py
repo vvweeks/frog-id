@@ -3,12 +3,15 @@ features/birdnet_embeddings.py - Extracts and caches BirdNET embeddings
 per audio file, and a Dataset that loads the cached embeddings for
 training a lightweight classifier head.
 
-IMPORTANT: BirdNET's encode() returns an AcousticFileEncodingResult
-object, not a plain array or DataFrame. It exposes public properties:
+BirdNET already segments audio into 3-second windows internally, so we
+lean on that for multi-clip: instead of mean-pooling a recording down to
+one vector, we keep each valid segment as its own cached sample (capped at
+MAX_CLIPS_PER_RECORDING). Audio is fed at BirdNET's native 48 kHz.
+
+encode() returns an AcousticFileEncodingResult exposing:
   - .embeddings         shape (n_inputs, n_segments, emb_dim)
-  - .embeddings_masked  same shape, boolean, True = invalid/padded segment
-  - .emb_dim            embedding dimensionality (e.g. 1024 for v2.4)
-We mask out invalid segments before pooling across the segment axis.
+  - .embeddings_masked  same shape, boolean, True = invalid/padded
+  - .emb_dim            embedding dimensionality (1024 for v2.4)
 """
 import os
 import numpy as np
@@ -17,8 +20,11 @@ import torch
 import torchaudio
 from torch.utils.data import Dataset
 
-from config import SAMPLE_RATE, TARGET_LENGTH, TRAIN_DIR, TEST_DIR, SPECIES_MAP, EMBEDDING_CACHE_DIR
-from features.spectrogram_dataset import crop_to_target_length
+from config import (
+    BIRDNET_SAMPLE_RATE, MAX_CLIPS_PER_RECORDING, SPECIES_MAP,
+    EMBEDDING_CACHE_DIR, species_dir,
+)
+from data.manifest import Manifest
 
 _BIRDNET_MODEL = None
 EMBEDDING_DIM = None  # populated on first load_birdnet_model() call
@@ -36,8 +42,7 @@ def load_birdnet_model():
 
 def sanity_check_encode(sample_file_path):
     """Runs encode() on one file and reports shape/emb_dim - useful to
-    confirm the API hasn't changed before a big batch run. Sets the
-    module-level EMBEDDING_DIM as a side effect."""
+    confirm the API hasn't changed before a big batch run."""
     global EMBEDDING_DIM
     model = load_birdnet_model()
     result = model.encode(sample_file_path)
@@ -48,92 +53,91 @@ def sanity_check_encode(sample_file_path):
     return result
 
 
-def _pool_embedding(result):
-    """Masked mean-pool across the segment axis for a single-file
-    encode() result. Returns a single (emb_dim,) vector."""
-    embeddings = result.embeddings           # (n_inputs, n_segments, emb_dim)
-    mask = result.embeddings_masked          # same shape, True = invalid
-
-    valid = ~mask
-    filled = np.where(valid, embeddings, np.nan)
-    pooled = np.nanmean(filled, axis=1)      # -> (n_inputs, emb_dim)
-
-    if np.isnan(pooled).any():
-        # Edge case: every segment was masked for some input - fall back
-        # to an unmasked mean rather than returning NaNs.
-        pooled = np.nanmean(embeddings, axis=1)
-
-    return pooled[0]  # single input file per call -> (emb_dim,)
+def _cache_prefix(species, filename):
+    return f"{species}__{filename}__seg"
 
 
-def extract_embedding_for_file(file_path, tmp_wav_path):
-    """Crops audio to TARGET_LENGTH, writes a temp wav, runs it through
-    BirdNET's encode(), and returns a single pooled embedding vector.
-    Returns None if the file is corrupt/unreadable."""
+def extract_segment_embeddings(file_path, tmp_wav_path, max_clips):
+    """Returns a list of per-segment embedding vectors (one per valid
+    BirdNET 3-second window, capped at max_clips). Empty list if the file
+    is corrupt/unreadable."""
     try:
         waveform, sr = torchaudio.load(file_path)
     except Exception as e:
         print(f"  [Skip - corrupt] {file_path}: {e}")
-        return None
+        return []
 
-    if sr != SAMPLE_RATE:
-        waveform = torchaudio.transforms.Resample(sr, SAMPLE_RATE)(waveform)
+    if sr != BIRDNET_SAMPLE_RATE:
+        waveform = torchaudio.transforms.Resample(sr, BIRDNET_SAMPLE_RATE)(waveform)
     if waveform.shape[0] > 1:
         waveform = torch.mean(waveform, dim=0, keepdim=True)
 
-    waveform = crop_to_target_length(waveform, SAMPLE_RATE, TARGET_LENGTH, is_train=False)
-    sf.write(tmp_wav_path, waveform.squeeze(0).numpy(), SAMPLE_RATE)
+    # Bound work: never encode more audio than max_clips 3-second windows.
+    max_samples = max_clips * int(3 * BIRDNET_SAMPLE_RATE)
+    waveform = waveform[:, :max_samples]
+    sf.write(tmp_wav_path, waveform.squeeze(0).numpy(), BIRDNET_SAMPLE_RATE)
 
     model = load_birdnet_model()
     result = model.encode(tmp_wav_path)
-    return _pool_embedding(result)
+    embeddings = np.asarray(result.embeddings)[0]          # (n_segments, emb_dim)
+    masked = np.asarray(result.embeddings_masked)[0]        # (n_segments, emb_dim)
+    seg_valid = ~masked.all(axis=-1)                        # (n_segments,)
+
+    out = []
+    for emb, valid in zip(embeddings, seg_valid):
+        if valid:
+            out.append(emb.astype(np.float32))
+        if len(out) >= max_clips:
+            break
+    return out
 
 
-def build_embedding_cache(root_dir, class_map):
-    """Walks root_dir, extracts + caches a BirdNET embedding .npy for
-    every audio file not already cached. Safe to re-run - skips
-    anything already cached."""
+def build_embedding_cache(class_map=None, manifest=None):
+    """Walks the manifest and caches one BirdNET embedding .npy per valid
+    segment of every audio file not already cached. Safe to re-run."""
+    class_map = class_map or SPECIES_MAP
+    manifest = manifest or Manifest.load()
     os.makedirs(EMBEDDING_CACHE_DIR, exist_ok=True)
     tmp_wav_path = os.path.join("/tmp", "birdnet_tmp_clip.wav")
     new_count = 0
 
-    for class_name in class_map:
-        class_dir = os.path.join(root_dir, class_name)
-        if not os.path.isdir(class_dir):
+    for r in manifest.rows():
+        species, filename = r["species"], r["filename"]
+        if species not in class_map:
             continue
-        for fname in os.listdir(class_dir):
-            if not (fname.endswith(".mp3") or fname.endswith(".wav")):
-                continue
-            file_path = os.path.join(class_dir, fname)
-            cache_path = os.path.join(EMBEDDING_CACHE_DIR, f"{class_name}__{fname}.npy")
-            if os.path.exists(cache_path):
-                continue
-            embedding = extract_embedding_for_file(file_path, tmp_wav_path)
-            if embedding is not None:
-                np.save(cache_path, embedding)
-                new_count += 1
+        file_path = os.path.join(species_dir(species), filename)
+        if not os.path.exists(file_path):
+            continue
+        prefix = _cache_prefix(species, filename)
+        if os.path.exists(os.path.join(EMBEDDING_CACHE_DIR, f"{prefix}0.npy")):
+            continue  # already cached (seg0 present)
 
-    print(f"Cached {new_count} new embeddings from {root_dir}.")
+        for i, emb in enumerate(extract_segment_embeddings(file_path, tmp_wav_path, MAX_CLIPS_PER_RECORDING)):
+            np.save(os.path.join(EMBEDDING_CACHE_DIR, f"{prefix}{i}.npy"), emb)
+            new_count += 1
+
+    print(f"Cached {new_count} new segment embeddings.")
 
 
 class BirdNETEmbeddingDataset(Dataset):
-    """Loads pre-cached BirdNET embeddings (fast - no audio decoding or
-    model inference at train time, since BirdNET is frozen)."""
+    """Loads pre-cached BirdNET segment embeddings for one manifest split
+    (fast - no audio decoding or model inference at train time)."""
 
-    def __init__(self, root_dir, class_map):
+    def __init__(self, split, class_map):
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(class_map.keys())}
         self.embedding_paths = []
         self.labels = []
 
-        for class_name in os.listdir(root_dir):
-            if class_name not in self.class_to_idx:
+        for r in Manifest.load().for_split(split):
+            species = r["species"]
+            if species not in self.class_to_idx:
                 continue
-            class_dir = os.path.join(root_dir, class_name)
-            for fname in os.listdir(class_dir):
-                cache_path = os.path.join(EMBEDDING_CACHE_DIR, f"{class_name}__{fname}.npy")
+            prefix = _cache_prefix(species, r["filename"])
+            for i in range(MAX_CLIPS_PER_RECORDING):
+                cache_path = os.path.join(EMBEDDING_CACHE_DIR, f"{prefix}{i}.npy")
                 if os.path.exists(cache_path):
                     self.embedding_paths.append(cache_path)
-                    self.labels.append(self.class_to_idx[class_name])
+                    self.labels.append(self.class_to_idx[species])
 
     def __len__(self):
         return len(self.embedding_paths)

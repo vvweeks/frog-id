@@ -6,12 +6,11 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Subset
-from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader
 
 from config import (
-    TRAIN_DIR, TEST_DIR, SPECIES_MAP, BATCH_SIZE, EPOCHS, LEARNING_RATE,
-    VAL_SPLIT, BACKBONE_LR_MULT, WEIGHT_DECAY, RANDOM_SEED, CHECKPOINT_DIR,
+    SPECIES_MAP, BATCH_SIZE, EPOCHS, LEARNING_RATE,
+    BACKBONE_LR_MULT, WEIGHT_DECAY, CHECKPOINT_DIR,
 )
 from features.spectrogram_dataset import FrogCallDataset
 from models.resnet_transfer import get_frog_model, freeze_bn_stats
@@ -21,32 +20,20 @@ def train_model(run_id=None, early_stop_patience=5):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using Device: {device}")
 
-    train_transform_dataset = FrogCallDataset(TRAIN_DIR, SPECIES_MAP, is_train=True)
-    val_transform_dataset = FrogCallDataset(TRAIN_DIR, SPECIES_MAP, is_train=False)
-    # Both scan TRAIN_DIR independently via os.listdir(); force identical
-    # ordering so train_idx/val_idx (computed once, below) select the same
-    # files from each rather than relying on directory-listing order to
-    # coincidentally match between the two separate scans.
-    val_transform_dataset.file_paths = train_transform_dataset.file_paths
-    val_transform_dataset.labels = train_transform_dataset.labels
+    # Splits come from the manifest (recordist-disjoint), so val is
+    # leakage-free from train - no runtime random split needed.
+    train_dataset = FrogCallDataset("train", SPECIES_MAP)
+    val_dataset = FrogCallDataset("val", SPECIES_MAP)
+    test_dataset = FrogCallDataset("test", SPECIES_MAP)
 
-    if len(train_transform_dataset) == 0:
-        raise RuntimeError("Training dataset is empty.")
+    if len(train_dataset) == 0:
+        raise RuntimeError("Training split is empty - run scripts.make_split first.")
 
-    all_indices = list(range(len(train_transform_dataset)))
-    all_labels = train_transform_dataset.labels
-    train_idx, val_idx = train_test_split(
-        all_indices, test_size=VAL_SPLIT, stratify=all_labels, random_state=RANDOM_SEED,
-    )
-    train_subset = Subset(train_transform_dataset, train_idx)
-    val_subset = Subset(val_transform_dataset, val_idx)
-    test_dataset = FrogCallDataset(TEST_DIR, SPECIES_MAP, is_train=False)
-
-    train_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_subset, batch_size=BATCH_SIZE, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-    print(f"Train: {len(train_subset)} | Val: {len(val_subset)} | Test: {len(test_dataset)}")
+    print(f"Train: {len(train_dataset)} | Val: {len(val_dataset)} | Test: {len(test_dataset)}")
 
     model = get_frog_model().to(device)
     criterion = nn.CrossEntropyLoss()
@@ -74,7 +61,7 @@ def train_model(run_id=None, early_stop_patience=5):
             loss.backward()
             optimizer.step()
             running_loss += loss.item() * inputs.size(0)
-        train_losses.append(running_loss / len(train_subset))
+        train_losses.append(running_loss / len(train_dataset))
 
         model.eval()
         val_running_loss, correct, total = 0.0, 0, 0
@@ -88,7 +75,7 @@ def train_model(run_id=None, early_stop_patience=5):
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
 
-        val_losses.append(val_running_loss / len(val_subset))
+        val_losses.append(val_running_loss / len(val_dataset))
         val_acc = 100 * correct / total
         val_accuracies.append(val_acc)
         scheduler.step(val_losses[-1])

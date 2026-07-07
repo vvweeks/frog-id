@@ -1,26 +1,48 @@
 """
 data/inaturalist.py - iNaturalist gap-filling downloader with synonym
 fallback and corrupt-file blocklist support.
+
+Research-grade only: research-grade observations have a community-verified
+ID (2+ agreeing identifiers), so their species labels are trustworthy.
+"needs_id" observations are unverified and would inject label noise into
+the pool, so we don't pull them. Downloads into the flat
+DATA_DIR/<species>/ layout and records the observer as the recordist.
 """
 import os
 import time
 import requests
 
 from config import (
-    TRAIN_DIR, TEST_DIR, SPECIES_MAP, INAT_HEADERS,
-    TARGET_TRAIN, TARGET_TEST, CORRUPT_FILE_IDS, get_candidate_names,
+    SPECIES_MAP, INAT_HEADERS,
+    TARGET_PER_SPECIES, CORRUPT_FILE_IDS, get_candidate_names, species_dir,
 )
+from data.manifest import Manifest
 
 INAT_BASE_URL = "https://api.inaturalist.org/v1/observations"
 
 
-def _fetch_and_download_inat(sci_name, quality_grade, out_dir, limit):
+def _count_audio(folder):
+    if not os.path.isdir(folder):
+        return 0
+    return len([f for f in os.listdir(folder) if f.endswith((".mp3", ".wav"))])
+
+
+def _observer(obs):
+    """Stable per-recordist id for grouping: the user's login, falling
+    back to their numeric id."""
+    user = obs.get('user') or {}
+    return user.get('login') or str(user.get('id', '')) or ''
+
+
+def _fetch_and_download_inat(sci_name, class_name, out_dir, limit, manifest):
+    """Downloads up to `limit` NEW research-grade sounds, and back-fills
+    manifest metadata for any already on disk. Returns count downloaded."""
     downloaded = 0
     page = 1
     while downloaded < limit:
         params = {
             'taxon_name': sci_name, 'sounds': 'true',
-            'quality_grade': quality_grade, 'per_page': 30, 'page': page,
+            'quality_grade': 'research', 'per_page': 30, 'page': page,
         }
         try:
             resp = requests.get(INAT_BASE_URL, params=params, headers=INAT_HEADERS)
@@ -35,24 +57,28 @@ def _fetch_and_download_inat(sci_name, quality_grade, out_dir, limit):
         for obs in results:
             if downloaded >= limit:
                 break
+            recordist = _observer(obs)
             for sound in obs.get('sounds', []):
                 if downloaded >= limit:
                     break
                 stem = f"inat_{sound.get('id')}"
                 if stem in CORRUPT_FILE_IDS:
                     continue  # known-corrupt, skip permanently
+                filename = f"{stem}.mp3"
+                file_path = os.path.join(out_dir, filename)
+                if os.path.exists(file_path):
+                    manifest.upsert(class_name, filename, "inat", recordist, "research")
+                    continue
                 file_url = sound.get('file_url')
                 if not file_url:
-                    continue
-                file_name = os.path.join(out_dir, f"{stem}.mp3")
-                if os.path.exists(file_name):
                     continue
                 try:
                     audio_resp = requests.get(file_url, headers=INAT_HEADERS)
                     content_type = audio_resp.headers.get('Content-Type', '')
                     if audio_resp.status_code == 200 and (content_type.startswith('audio') or content_type == 'application/octet-stream'):
-                        with open(file_name, 'wb') as f:
+                        with open(file_path, 'wb') as f:
                             f.write(audio_resp.content)
+                        manifest.upsert(class_name, filename, "inat", recordist, "research")
                         downloaded += 1
                 except requests.RequestException as e:
                     print(f"  [iNaturalist] download failed for {stem}: {e}")
@@ -62,31 +88,26 @@ def _fetch_and_download_inat(sci_name, quality_grade, out_dir, limit):
     return downloaded
 
 
-def fill_gaps_with_inaturalist(species_map=None, target_train=TARGET_TRAIN, target_test=TARGET_TEST):
-    print("--- iNaturalist Gap-Filling (synonym-aware) ---")
-    target_species = species_map if species_map is not None else SPECIES_MAP
+def fill_gaps_with_inaturalist(target_per_species=TARGET_PER_SPECIES, manifest=None):
+    print("--- iNaturalist Gap-Filling (research-grade only, synonym-aware) ---")
+    own_manifest = manifest is None
+    if manifest is None:
+        manifest = Manifest.load()
 
-    for class_name in target_species:
-        train_path = os.path.join(TRAIN_DIR, class_name)
-        test_path = os.path.join(TEST_DIR, class_name)
-        os.makedirs(train_path, exist_ok=True)
-        os.makedirs(test_path, exist_ok=True)
+    for class_name in SPECIES_MAP:
+        out_dir = species_dir(class_name)
+        os.makedirs(out_dir, exist_ok=True)
 
         for sci_name in get_candidate_names(class_name):
-            needed_train = max(0, target_train - len(os.listdir(train_path)))
-            needed_test = max(0, target_test - len(os.listdir(test_path)))
-
-            if needed_train == 0 and needed_test == 0:
+            needed = max(0, target_per_species - _count_audio(out_dir))
+            if needed == 0:
                 break
 
-            print(f"Topping up {class_name} via '{sci_name}': "
-                  f"{needed_train} Train, {needed_test} Test needed...")
+            print(f"Topping up {class_name} via '{sci_name}': {needed} needed...")
+            got = _fetch_and_download_inat(sci_name, class_name, out_dir, needed, manifest)
+            print(f"  -> '{sci_name}': +{got} for {class_name}.")
 
-            got_train = _fetch_and_download_inat(sci_name, "research", train_path, needed_train) if needed_train else 0
-            got_test = _fetch_and_download_inat(sci_name, "needs_id", test_path, needed_test) if needed_test else 0
+        print(f"{class_name}: {_count_audio(out_dir)}/{target_per_species} recordings.\n")
 
-            print(f"  -> '{sci_name}': +{got_train} Train, +{got_test} Test for {class_name}.")
-
-        final_train = len(os.listdir(train_path))
-        final_test = len(os.listdir(test_path))
-        print(f"{class_name}: {final_train}/{target_train} Train, {final_test}/{target_test} Test.\n")
+    if own_manifest:
+        manifest.save()

@@ -47,16 +47,33 @@ os.makedirs(DRIVE_SAVE_DIR, exist_ok=True)
 PROJECT_DIR = os.path.join(DRIVE_SAVE_DIR, "frog_id_outputs")
 
 DATA_DIR = os.path.join(PROJECT_DIR, "ct_frog_dataset")
-TRAIN_DIR = os.path.join(DATA_DIR, "train")
-TEST_DIR = os.path.join(DATA_DIR, "test")
+# Flat, split-agnostic layout: audio lives at DATA_DIR/<species>/<file>.
+# Train/val/test membership is recorded in the manifest (see data/manifest.py)
+# and assigned by scripts/make_split.py, NOT by which folder a file sits in.
 EMBEDDING_CACHE_DIR = os.path.join(DATA_DIR, "birdnet_embeddings")
+MANIFEST_PATH = os.path.join(DATA_DIR, "manifest.csv")
 CHECKPOINT_DIR = os.path.join(PROJECT_DIR, "checkpoints")
 RESULTS_DIR = os.path.join(PROJECT_DIR, "results")
 
+
+def species_dir(species):
+    """Directory holding a species' audio in the flat layout."""
+    return os.path.join(DATA_DIR, species)
+
 # --- Audio / preprocessing ---
-SAMPLE_RATE = 22050
+SAMPLE_RATE = 22050          # ResNet mel-spectrogram pipeline
 DURATION_SEC = 3.0
 TARGET_LENGTH = int(SAMPLE_RATE * DURATION_SEC)
+
+# BirdNET v2.4 was trained on 48 kHz, 3-second windows - feed it that
+# natively rather than the downsampled 22.05 kHz used for the ResNet path,
+# or its high-frequency mel bins see silence and embeddings degrade.
+BIRDNET_SAMPLE_RATE = 48000
+
+# Cap on how many 3-second clips to draw from a single recording, so one
+# long file can't dominate. Multiple clips from one file always share a
+# recordist, so they stay on the same side of the split (no leakage).
+MAX_CLIPS_PER_RECORDING = 5
 
 # --- Training hyperparameters ---
 BATCH_SIZE = 16
@@ -73,8 +90,10 @@ np.random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)
 
 # --- Dataset download targets ---
-TARGET_TRAIN = 60
-TARGET_TEST = 15
+# Single pooled ceiling per species (train/val/test are carved out later
+# by scripts/make_split.py). Treat this as an upper bound - the real goal
+# is lifting thin classes, not padding already-plentiful ones.
+TARGET_PER_SPECIES = 100
 
 # --- Species ---
 # To add a species for a future capstone extension: add the Common Name

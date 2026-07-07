@@ -1,95 +1,56 @@
 """
-data/inventory.py - Reports current dataset composition per class,
-split by Train/Test and by source (Xeno-canto/iNaturalist).
+data/inventory.py - Reports dataset composition from the manifest:
+per-species counts broken out by split (train/val/test/unassigned) and
+by source (Xeno-canto/iNaturalist).
 """
-import os
-import pandas as pd
+from collections import defaultdict
 
-from config import TRAIN_DIR, TEST_DIR, SPECIES_MAP, VAL_SPLIT
-
-
-def _count_by_source(folder_path):
-    xc_count = 0
-    inat_count = 0
-    if os.path.exists(folder_path):
-        for file_name in os.listdir(folder_path):
-            if file_name.startswith("inat_"):
-                inat_count += 1
-            elif file_name.endswith(".mp3") or file_name.endswith(".wav"):
-                xc_count += 1
-    return xc_count, inat_count
+from config import SPECIES_MAP
+from data.manifest import Manifest
 
 
-def print_dataset_inventory(val_split=None):
-    """
-    Prints a per-class inventory broken out by physical split (Train/Test)
-    and by source. Note: there is no physical Validation folder - Val is
-    carved out of TRAIN_DIR at runtime by train_test_split() during
-    training, so the Val/Effective-Train columns here are an *estimate*.
-    """
-    print("\n=================== DATASET INVENTORY REPORT ===================")
-    effective_val_split = val_split if val_split is not None else VAL_SPLIT
+def print_dataset_inventory(manifest=None):
+    manifest = manifest or Manifest.load()
+    rows = manifest.rows()
 
-    table_rows = []
-    totals = {k: 0 for k in [
-        "xc_train", "inat_train", "total_train",
-        "xc_test", "inat_test", "total_test",
-        "est_val", "est_effective_train",
-    ]}
+    # species -> counts
+    by_split = defaultdict(lambda: defaultdict(int))   # species -> split -> n
+    by_source = defaultdict(lambda: defaultdict(int))  # species -> source -> n
+    for r in rows:
+        sp = r["species"]
+        by_split[sp][r.get("split") or "unassigned"] += 1
+        by_source[sp][r.get("source") or "unknown"] += 1
 
-    for class_name, sci_name in SPECIES_MAP.items():
-        train_path = os.path.join(TRAIN_DIR, class_name)
-        test_path = os.path.join(TEST_DIR, class_name)
+    print("\n=================== DATASET INVENTORY (from manifest) ===================")
+    header = f"{'Species':<24}{'XC':>5}{'iNat':>6}{'Train':>7}{'Val':>6}{'Test':>6}{'Unasgn':>8}"
+    print(header)
+    print("-" * len(header))
 
-        xc_train, inat_train = _count_by_source(train_path)
-        xc_test, inat_test = _count_by_source(test_path)
+    totals = defaultdict(int)
+    empty_test, unassigned_any = [], False
+    for species in SPECIES_MAP:
+        s, src = by_split[species], by_source[species]
+        xc, inat = src.get("xeno_canto", 0), src.get("inat", 0)
+        tr, va, te = s.get("train", 0), s.get("val", 0), s.get("test", 0)
+        un = s.get("unassigned", 0)
+        print(f"{species:<24}{xc:>5}{inat:>6}{tr:>7}{va:>6}{te:>6}{un:>8}")
+        for k, v in [("xc", xc), ("inat", inat), ("train", tr), ("val", va), ("test", te), ("unassigned", un)]:
+            totals[k] += v
+        total_for_sp = xc + inat
+        if total_for_sp > 0 and te == 0:
+            empty_test.append(species)
+        if un > 0:
+            unassigned_any = True
 
-        total_train = xc_train + inat_train
-        total_test = xc_test + inat_test
-        est_val = round(total_train * effective_val_split)
-        est_effective_train = total_train - est_val
+    print("-" * len(header))
+    print(f"{'TOTAL':<24}{totals['xc']:>5}{totals['inat']:>6}"
+          f"{totals['train']:>7}{totals['val']:>6}{totals['test']:>6}{totals['unassigned']:>8}")
+    print(f"\nGrand total: {len(rows)} files "
+          f"[XC: {totals['xc']}, iNat: {totals['inat']}]")
 
-        table_rows.append({
-            "Common Name": class_name.replace("_", " "),
-            "Scientific Name": sci_name,
-            "XC (Train)": xc_train, "iNat (Train)": inat_train,
-            "Total Train": total_train,
-            "Est. Val": est_val, "Est. Effective Train": est_effective_train,
-            "XC (Test)": xc_test, "iNat (Test)": inat_test,
-            "Total Test": total_test,
-            "Grand Total": total_train + total_test,
-        })
-
-        totals["xc_train"] += xc_train
-        totals["inat_train"] += inat_train
-        totals["total_train"] += total_train
-        totals["xc_test"] += xc_test
-        totals["inat_test"] += inat_test
-        totals["total_test"] += total_test
-        totals["est_val"] += est_val
-        totals["est_effective_train"] += est_effective_train
-
-    df = pd.DataFrame(table_rows)
-    try:
-        from IPython.display import display
-        display(df)
-    except Exception:
-        # IPython being importable doesn't guarantee a live kernel to
-        # display through (e.g. when run via `!python -m ...`, which
-        # executes as a subprocess outside the notebook's kernel).
-        print(df.to_string(index=False))
-
-    print(f"\n--- Totals (Est. Val based on val_split={effective_val_split:.0%}) ---")
-    print(f"Train (raw files, before Val split): {totals['total_train']}  "
-          f"[XC: {totals['xc_train']}, iNat: {totals['inat_train']}]")
-    print(f"  -> Est. Effective Train: {totals['est_effective_train']}  |  Est. Val: {totals['est_val']}")
-    print(f"Test (held-out, untouched during training): {totals['total_test']}  "
-          f"[XC: {totals['xc_test']}, iNat: {totals['inat_test']}]")
-    print(f"Grand Total (all files): {totals['total_train'] + totals['total_test']}")
-
-    thin_test_classes = df[df["Total Test"] < 5]["Common Name"].tolist()
-    if thin_test_classes:
-        print(f"\n⚠️  Classes with fewer than 5 Test samples: {', '.join(thin_test_classes)}")
-
-    print("================================================================")
-    return df
+    if unassigned_any:
+        print("\nℹ️  Some files are unassigned - run `python -m scripts.make_split` to assign train/val/test.")
+    if empty_test:
+        print(f"⚠️  Classes with 0 test samples: {', '.join(empty_test)}")
+    print("========================================================================")
+    return rows

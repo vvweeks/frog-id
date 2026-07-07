@@ -7,12 +7,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Subset
-from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader
 
 from config import (
-    TRAIN_DIR, TEST_DIR, SPECIES_MAP, BATCH_SIZE,
-    VAL_SPLIT, WEIGHT_DECAY, RANDOM_SEED, CHECKPOINT_DIR,
+    SPECIES_MAP, BATCH_SIZE, WEIGHT_DECAY, CHECKPOINT_DIR,
 )
 from features.birdnet_embeddings import BirdNETEmbeddingDataset
 from models.birdnet_head import get_birdnet_classifier_head
@@ -22,30 +20,25 @@ def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None, early_stop_patienc
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using Device: {device}")
 
-    full_train_dataset = BirdNETEmbeddingDataset(TRAIN_DIR, SPECIES_MAP)
-    test_dataset = BirdNETEmbeddingDataset(TEST_DIR, SPECIES_MAP)
+    # Splits come from the manifest (recordist-disjoint); no runtime split.
+    train_dataset = BirdNETEmbeddingDataset("train", SPECIES_MAP)
+    val_dataset = BirdNETEmbeddingDataset("val", SPECIES_MAP)
+    test_dataset = BirdNETEmbeddingDataset("test", SPECIES_MAP)
 
-    if len(full_train_dataset) == 0:
-        raise RuntimeError("No cached embeddings found - run build_embedding_cache() first.")
+    if len(train_dataset) == 0:
+        raise RuntimeError("No cached train embeddings found - run build_embeddings "
+                           "and make_split first.")
 
-    all_indices = list(range(len(full_train_dataset)))
-    all_labels = full_train_dataset.labels
-    train_idx, val_idx = train_test_split(
-        all_indices, test_size=VAL_SPLIT, stratify=all_labels, random_state=RANDOM_SEED,
-    )
-    train_subset = Subset(full_train_dataset, train_idx)
-    val_subset = Subset(full_train_dataset, val_idx)
+    print(f"Train: {len(train_dataset)} | Val: {len(val_dataset)} | Test: {len(test_dataset)}")
 
-    print(f"Train: {len(train_subset)} | Val: {len(val_subset)} | Test: {len(test_dataset)}")
-
-    train_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_subset, batch_size=BATCH_SIZE, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     # build_embeddings.py runs in a separate process, so its EMBEDDING_DIM
     # can't be imported here - read the true dimension off a real cached
     # embedding instead of trusting a hardcoded fallback.
-    embedding_dim = np.load(full_train_dataset.embedding_paths[0]).shape[0]
+    embedding_dim = np.load(train_dataset.embedding_paths[0]).shape[0]
     model = get_birdnet_classifier_head(embedding_dim=embedding_dim).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
@@ -67,7 +60,7 @@ def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None, early_stop_patienc
             loss.backward()
             optimizer.step()
             running_loss += loss.item() * inputs.size(0)
-        train_losses.append(running_loss / len(train_subset))
+        train_losses.append(running_loss / len(train_dataset))
 
         model.eval()
         val_running_loss, correct, total = 0.0, 0, 0
@@ -80,7 +73,7 @@ def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None, early_stop_patienc
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
-        val_losses.append(val_running_loss / len(val_subset))
+        val_losses.append(val_running_loss / len(val_dataset))
         val_acc = 100 * correct / total
         val_accuracies.append(val_acc)
         scheduler.step(val_losses[-1])
