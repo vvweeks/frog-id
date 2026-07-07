@@ -151,7 +151,9 @@ def get_candidate_names(class_name):
 # --- API credentials ---
 # NEVER hardcode these. Set as real environment variables (locally) or
 # Colab secrets (in Colab: google.colab.userdata.get(...)) before use.
-XC_API_KEY = os.environ.get("XC_API_KEY", "")
+# .strip() guards against a trailing newline / stray spaces / quotes in the
+# stored secret, which XC rejects with a 401 ("invalid key").
+XC_API_KEY = os.environ.get("XC_API_KEY", "").strip().strip('"').strip("'")
 INAT_CONTACT_EMAIL = os.environ.get("INAT_CONTACT_EMAIL", "your_email@example.com")
 INAT_HEADERS = {
     'User-Agent': f'FrogToadClassifier/1.0 (research project; contact: {INAT_CONTACT_EMAIL})'
@@ -160,9 +162,18 @@ INAT_HEADERS = {
 if IN_COLAB and not XC_API_KEY:
     try:
         from google.colab import userdata
-        XC_API_KEY = userdata.get('XC_API_KEY')
+        XC_API_KEY = (userdata.get('XC_API_KEY') or "").strip().strip('"').strip("'")
     except Exception:
         pass
+
+
+def masked_xc_key():
+    """A safe-to-print fingerprint of the key (first/last 4 chars + length),
+    so a wrong/whitespaced key can be spotted without exposing the secret.
+    A valid Xeno-canto key is 40 hex characters."""
+    k = XC_API_KEY or ""
+    return f"(len {len(k)})" if len(k) <= 8 else f"{k[:4]}...{k[-4:]} (len {len(k)})"
+
 
 if not XC_API_KEY:
     print("WARNING: XC_API_KEY is not set. Set it as an environment variable "

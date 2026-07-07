@@ -15,7 +15,7 @@ import requests
 
 from config import (
     DATA_DIR, SPECIES_MAP, XC_API_KEY,
-    TARGET_PER_SPECIES, CORRUPT_FILE_IDS, get_candidate_names, species_dir,
+    TARGET_PER_SPECIES, CORRUPT_FILE_IDS, get_candidate_names, species_dir, masked_xc_key,
 )
 from data.manifest import Manifest
 
@@ -61,6 +61,12 @@ def _query_xeno_canto(sci_name, max_retries=4):
             print(f"  [Xeno-canto] rate-limited (429) on '{sci_name}' - backing off {wait}s")
             time.sleep(wait)
             continue
+        if response.status_code == 401:
+            print(f"  [Xeno-canto] HTTP 401 - key rejected. Using key {masked_xc_key()}. "
+                  f"Check the XC_API_KEY value in Colab Secrets matches "
+                  f"https://xeno-canto.org/account exactly (40 hex chars, no quotes/"
+                  f"spaces), and that this notebook is granted access to the secret.")
+            return []
         if response.status_code != 200:
             print(f"  [Xeno-canto] HTTP {response.status_code} for '{sci_name}': "
                   f"{response.text[:200]}")
