@@ -43,6 +43,7 @@ DATA_DIR = os.path.join(DRIVE_SAVE_DIR, "ct_frog_dataset")
 TRAIN_DIR = os.path.join(DATA_DIR, "train")
 TEST_DIR = os.path.join(DATA_DIR, "test")
 EMBEDDING_CACHE_DIR = os.path.join(DATA_DIR, "birdnet_embeddings")
+CHECKPOINT_DIR = os.path.join(DRIVE_SAVE_DIR, "checkpoints")
 
 # --- Audio / preprocessing ---
 SAMPLE_RATE = 22050

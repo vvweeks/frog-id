@@ -11,13 +11,13 @@ from sklearn.model_selection import train_test_split
 
 from config import (
     TRAIN_DIR, TEST_DIR, SPECIES_MAP, BATCH_SIZE, EPOCHS, LEARNING_RATE,
-    VAL_SPLIT, BACKBONE_LR_MULT, WEIGHT_DECAY, RANDOM_SEED, DRIVE_SAVE_DIR,
+    VAL_SPLIT, BACKBONE_LR_MULT, WEIGHT_DECAY, RANDOM_SEED, CHECKPOINT_DIR,
 )
 from features.spectrogram_dataset import FrogCallDataset
 from models.resnet_transfer import get_frog_model, freeze_bn_stats
 
 
-def train_model():
+def train_model(run_id=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using Device: {device}")
 
@@ -118,7 +118,10 @@ def train_model():
     final_test_acc = 100 * test_correct / test_total
     print(f"Final Test Accuracy: {final_test_acc:.2f}%")
 
-    save_path = os.path.join(DRIVE_SAVE_DIR, "ct_frog_resnet18_v5a.pth")
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    checkpoint_name = f"{run_id}.pth" if run_id else "resnet18.pth"
+    save_path = os.path.join(CHECKPOINT_DIR, checkpoint_name)
     torch.save(model.state_dict(), save_path)
+    print(f"Saved checkpoint: {save_path}")
 
-    return train_losses, val_losses, val_accuracies, final_test_acc
+    return train_losses, val_losses, val_accuracies, final_test_acc, save_path

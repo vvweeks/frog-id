@@ -12,13 +12,13 @@ from sklearn.model_selection import train_test_split
 
 from config import (
     TRAIN_DIR, TEST_DIR, SPECIES_MAP, BATCH_SIZE,
-    VAL_SPLIT, WEIGHT_DECAY, RANDOM_SEED, DRIVE_SAVE_DIR,
+    VAL_SPLIT, WEIGHT_DECAY, RANDOM_SEED, CHECKPOINT_DIR,
 )
 from features.birdnet_embeddings import BirdNETEmbeddingDataset
 from models.birdnet_head import get_birdnet_classifier_head
 
 
-def train_birdnet_classifier(epochs=50, lr=1e-3):
+def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using Device: {device}")
 
@@ -110,7 +110,10 @@ def train_birdnet_classifier(epochs=50, lr=1e-3):
     final_test_acc = 100 * test_correct / test_total
     print(f"Final Test Accuracy (BirdNET-embedding classifier): {final_test_acc:.2f}%")
 
-    save_path = os.path.join(DRIVE_SAVE_DIR, "ct_frog_birdnet_head_v1.pth")
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    checkpoint_name = f"{run_id}.pth" if run_id else "birdnet_head.pth"
+    save_path = os.path.join(CHECKPOINT_DIR, checkpoint_name)
     torch.save(model.state_dict(), save_path)
+    print(f"Saved checkpoint: {save_path}")
 
-    return train_losses, val_losses, val_accuracies, final_test_acc
+    return train_losses, val_losses, val_accuracies, final_test_acc, save_path

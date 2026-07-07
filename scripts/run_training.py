@@ -9,6 +9,7 @@ import argparse
 import csv
 import json
 import os
+import subprocess
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -18,19 +19,36 @@ from config import DRIVE_SAVE_DIR
 RESULTS_DIR = os.path.join(DRIVE_SAVE_DIR, "results")
 
 
-def save_results(model_name, train_losses, val_losses, val_accuracies, final_test_acc, hyperparams=None):
-    """Saves a timestamped JSON of full metrics + a PNG of the plot, and
-    appends a summary row to a master CSV log for cross-run comparison."""
-    os.makedirs(RESULTS_DIR, exist_ok=True)
+def get_git_commit_hash():
+    """Short hash of the current commit, so every saved run is traceable
+    back to the exact code that produced it. Returns 'nogit' if unavailable."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return "nogit"
+
+
+def make_run_id(model_name):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_id = f"{model_name}_{timestamp}"
+    return f"{model_name}_{timestamp}_{get_git_commit_hash()}"
+
+
+def save_results(run_id, model_name, train_losses, val_losses, val_accuracies, final_test_acc,
+                  hyperparams=None, checkpoint_path=None):
+    """Saves a full-metrics JSON, and appends a summary row to a master
+    CSV log for cross-run comparison. Both are keyed by run_id, which
+    also ties back to the saved checkpoint and the git commit it came from."""
+    os.makedirs(RESULTS_DIR, exist_ok=True)
 
     # --- Full per-run metrics (every epoch) ---
     metrics_path = os.path.join(RESULTS_DIR, f"{run_id}_metrics.json")
     with open(metrics_path, 'w') as f:
         json.dump({
+            "run_id": run_id,
             "model_name": model_name,
-            "timestamp": timestamp,
+            "checkpoint_path": checkpoint_path,
             "hyperparams": hyperparams or {},
             "train_losses": train_losses,
             "val_losses": val_losses,
@@ -47,16 +65,16 @@ def save_results(model_name, train_losses, val_losses, val_accuracies, final_tes
     with open(log_path, 'a', newline='') as f:
         writer = csv.writer(f)
         if not log_exists:
-            writer.writerow(["run_id", "model_name", "timestamp", "epochs_run",
-                              "best_val_accuracy", "final_test_accuracy"])
-        writer.writerow([run_id, model_name, timestamp, len(train_losses),
-                          f"{max(val_accuracies):.2f}", f"{final_test_acc:.2f}"])
+            writer.writerow(["run_id", "model_name", "epochs_run",
+                              "best_val_accuracy", "final_test_accuracy", "checkpoint_path"])
+        writer.writerow([run_id, model_name, len(train_losses),
+                          f"{max(val_accuracies):.2f}", f"{final_test_acc:.2f}", checkpoint_path])
     print(f"Appended summary row to: {log_path}")
 
-    return run_id, metrics_path
+    return metrics_path
 
 
-def plot_results(train_losses, val_losses, val_accuracies, final_test_acc, title_prefix, run_id=None):
+def plot_results(train_losses, val_losses, val_accuracies, final_test_acc, title_prefix, run_id):
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     axes[0].plot(train_losses, label="Training Loss")
     axes[0].plot(val_losses, label="Validation Loss", linestyle="--")
@@ -74,10 +92,9 @@ def plot_results(train_losses, val_losses, val_accuracies, final_test_acc, title
     axes[1].legend()
     plt.tight_layout()
 
-    if run_id:
-        plot_path = os.path.join(RESULTS_DIR, f"{run_id}_plot.png")
-        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-        print(f"Saved plot: {plot_path}")
+    plot_path = os.path.join(RESULTS_DIR, f"{run_id}_plot.png")
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    print(f"Saved plot: {plot_path}")
 
     plt.show()
 
@@ -94,14 +111,19 @@ if __name__ == "__main__":
     if args.model == "resnet":
         from config import EPOCHS, LEARNING_RATE, BACKBONE_LR_MULT, WEIGHT_DECAY
         from train_resnet import train_model
-        train_losses, val_losses, val_accuracies, final_test_acc = train_model()
+
+        run_id = make_run_id("resnet18")
+        train_losses, val_losses, val_accuracies, final_test_acc, checkpoint_path = train_model(run_id=run_id)
         hyperparams = {"epochs": EPOCHS, "lr": LEARNING_RATE,
                        "backbone_lr_mult": BACKBONE_LR_MULT, "weight_decay": WEIGHT_DECAY}
-        run_id, _ = save_results("resnet18", train_losses, val_losses, val_accuracies,
-                                   final_test_acc, hyperparams)
+        save_results(run_id, "resnet18", train_losses, val_losses, val_accuracies,
+                     final_test_acc, hyperparams, checkpoint_path)
         plot_results(train_losses, val_losses, val_accuracies, final_test_acc, "ResNet18", run_id)
     else:
         from train_birdnet import train_birdnet_classifier
-        train_losses, val_losses, val_accuracies, final_test_acc = train_birdnet_classifier()
-        run_id, _ = save_results("birdnet_head", train_losses, val_losses, val_accuracies, final_test_acc)
+
+        run_id = make_run_id("birdnet_head")
+        train_losses, val_losses, val_accuracies, final_test_acc, checkpoint_path = train_birdnet_classifier(run_id=run_id)
+        save_results(run_id, "birdnet_head", train_losses, val_losses, val_accuracies,
+                     final_test_acc, checkpoint_path=checkpoint_path)
         plot_results(train_losses, val_losses, val_accuracies, final_test_acc, "BirdNET-Embedding", run_id)
