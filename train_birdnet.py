@@ -18,7 +18,7 @@ from features.birdnet_embeddings import BirdNETEmbeddingDataset
 from models.birdnet_head import get_birdnet_classifier_head
 
 
-def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None):
+def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None, early_stop_patience=5):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using Device: {device}")
 
@@ -53,6 +53,7 @@ def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None):
 
     train_losses, val_losses, val_accuracies = [], [], []
     best_val_acc, best_state_dict = 0.0, None
+    best_val_loss, epochs_no_improve, stopped_early = float('inf'), 0, False
 
     print("--- Starting Training (BirdNET-embedding classifier) ---")
     for epoch in range(epochs):
@@ -93,6 +94,18 @@ def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None):
             print(f"Epoch {epoch+1}/{epochs} | Train Loss: {train_losses[-1]:.4f} | "
                   f"Val Loss: {val_losses[-1]:.4f} | Val Acc: {val_acc:.2f}% | LR: {current_lr:.2e}")
 
+        if val_losses[-1] < best_val_loss:
+            best_val_loss = val_losses[-1]
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= early_stop_patience:
+                print(f"\nEarly stopping: val loss hasn't improved on best "
+                      f"({best_val_loss:.4f}) for {early_stop_patience} "
+                      f"consecutive epochs (stopped at epoch {epoch+1}).")
+                stopped_early = True
+                break
+
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
         print(f"\nRestored best checkpoint (Val Acc: {best_val_acc:.2f}%)")
@@ -116,4 +129,4 @@ def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None):
     torch.save(model.state_dict(), save_path)
     print(f"Saved checkpoint: {save_path}")
 
-    return train_losses, val_losses, val_accuracies, final_test_acc, save_path
+    return train_losses, val_losses, val_accuracies, final_test_acc, save_path, stopped_early

@@ -17,7 +17,7 @@ from features.spectrogram_dataset import FrogCallDataset
 from models.resnet_transfer import get_frog_model, freeze_bn_stats
 
 
-def train_model(run_id=None):
+def train_model(run_id=None, early_stop_patience=5):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using Device: {device}")
 
@@ -58,6 +58,7 @@ def train_model(run_id=None):
 
     train_losses, val_losses, val_accuracies = [], [], []
     best_val_acc, best_state_dict = 0.0, None
+    best_val_loss, epochs_no_improve, stopped_early = float('inf'), 0, False
 
     print("--- Starting Training ---")
     for epoch in range(EPOCHS):
@@ -101,6 +102,18 @@ def train_model(run_id=None):
             best_val_acc = val_acc
             best_state_dict = {k: v.clone() for k, v in model.state_dict().items()}
 
+        if val_losses[-1] < best_val_loss:
+            best_val_loss = val_losses[-1]
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= early_stop_patience:
+                print(f"\nEarly stopping: val loss hasn't improved on best "
+                      f"({best_val_loss:.4f}) for {early_stop_patience} "
+                      f"consecutive epochs (stopped at epoch {epoch+1}).")
+                stopped_early = True
+                break
+
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
         print(f"\nRestored best checkpoint (Val Acc: {best_val_acc:.2f}%)")
@@ -124,4 +137,4 @@ def train_model(run_id=None):
     torch.save(model.state_dict(), save_path)
     print(f"Saved checkpoint: {save_path}")
 
-    return train_losses, val_losses, val_accuracies, final_test_acc, save_path
+    return train_losses, val_losses, val_accuracies, final_test_acc, save_path, stopped_early
