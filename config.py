@@ -92,8 +92,10 @@ torch.manual_seed(RANDOM_SEED)
 # --- Dataset download targets ---
 # Single pooled ceiling per species (train/val/test are carved out later
 # by scripts/make_split.py). Treat this as an upper bound - the real goal
-# is lifting thin classes, not padding already-plentiful ones.
-TARGET_PER_SPECIES = 100
+# is lifting thin classes, not padding already-plentiful ones. Raised past
+# the ~100 iNaturalist already provides so Xeno-canto (which runs first)
+# has room to add recordings and back-fill existing files' metadata.
+TARGET_PER_SPECIES = 150
 
 # --- Species ---
 # To add a species for a future capstone extension: add the Common Name

@@ -30,20 +30,45 @@ def _count_audio(folder):
     return len([f for f in os.listdir(folder) if f.endswith((".mp3", ".wav"))])
 
 
-def _query_xeno_canto(sci_name):
+def _query_xeno_canto(sci_name, max_retries=4):
     """Runs a single Xeno-canto v3 query for one scientific name.
-    Returns the list of recordings (empty list on any failure)."""
+
+    Retries with exponential backoff on rate limits (HTTP 429) and network
+    errors - Colab fires many queries in quick succession and XC will
+    throttle a burst. Logs the actual status/body on other failures so a
+    genuine problem (bad key, changed API) is visible instead of silently
+    looking like 'no recordings'. Returns [] only when there truly are none
+    or after retries are exhausted."""
     name_parts = sci_name.strip().split()
     genus, species = name_parts[0], name_parts[1] if len(name_parts) > 1 else ""
     query_str = f'gen:{genus}' + (f' sp:{species}' if species else '') + ' cnt:"United States"'
 
-    response = requests.get(
-        "https://xeno-canto.org/api/3/recordings",
-        params={'query': query_str, 'key': XC_API_KEY}
-    )
-    if response.status_code != 200:
-        return []
-    return response.json().get('recordings', [])
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(
+                "https://xeno-canto.org/api/3/recordings",
+                params={'query': query_str, 'key': XC_API_KEY},
+                timeout=30,
+            )
+        except requests.RequestException as e:
+            wait = 2 ** attempt
+            print(f"  [Xeno-canto] network error for '{sci_name}': {e} - retrying in {wait}s")
+            time.sleep(wait)
+            continue
+
+        if response.status_code == 429:
+            wait = 2 ** attempt
+            print(f"  [Xeno-canto] rate-limited (429) on '{sci_name}' - backing off {wait}s")
+            time.sleep(wait)
+            continue
+        if response.status_code != 200:
+            print(f"  [Xeno-canto] HTTP {response.status_code} for '{sci_name}': "
+                  f"{response.text[:200]}")
+            return []
+        return response.json().get('recordings', [])
+
+    print(f"  [Xeno-canto] gave up on '{sci_name}' after {max_retries} attempts (rate limit?).")
+    return []
 
 
 def _download_xc_recordings(recordings, class_name, out_dir, limit, manifest):
@@ -75,7 +100,7 @@ def _download_xc_recordings(recordings, class_name, out_dir, limit, manifest):
         if file_url.startswith("//"):
             file_url = "https:" + file_url
         try:
-            res = requests.get(file_url, headers={'User-Agent': 'Mozilla/5.0'})
+            res = requests.get(file_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=60)
             content_type = res.headers.get('Content-Type', '')
             if res.status_code == 200 and (content_type.startswith('audio') or content_type == 'application/octet-stream'):
                 with open(file_path, 'wb') as f:
