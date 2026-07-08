@@ -29,20 +29,27 @@ EXPORT_DIR = os.path.join(PROJECT_DIR, "llm_testset")
 AMBIGUOUS, UNMATCHED = "<ambiguous>", "<unmatched>"
 
 
+def _norm(s):
+    """Normalize a name for matching: lowercase, drop apostrophes (so
+    "Fowler's Toad" == "Fowlers Toad", incl. the curly ' variant), collapse
+    whitespace."""
+    return " ".join(s.lower().replace("’", "").replace("'", "").split())
+
+
 def _build_variants():
-    """variant string (lowercased) -> canonical species key."""
+    """normalized variant string -> canonical species key."""
     variants = {}
     for common, sci in SPECIES_MAP.items():
-        variants[common.replace("_", " ").lower()] = common
-        variants[sci.lower()] = common
+        variants[_norm(common.replace("_", " "))] = common
+        variants[_norm(sci)] = common
         for syn in SPECIES_SYNONYMS.get(common, []):
-            variants[syn.lower()] = common
+            variants[_norm(syn)] = common
     return variants
 
 
 def match_species(answer, variants):
     """Map a free-text answer to a canonical species key, or AMBIGUOUS/UNMATCHED."""
-    a = " ".join(answer.strip().lower().split())
+    a = _norm(answer)
     if not a:
         return UNMATCHED
     if a in variants:                       # exact name/synonym wins
