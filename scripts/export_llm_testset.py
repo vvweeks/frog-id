@@ -17,9 +17,10 @@ Run (after make_split):  python -m scripts.export_llm_testset
 """
 import csv
 import os
+import random
 import shutil
 
-from config import DATA_DIR, PROJECT_DIR, SPECIES_MAP, species_dir
+from config import DATA_DIR, PROJECT_DIR, SPECIES_MAP, RANDOM_SEED, species_dir
 from data.manifest import Manifest
 
 EXPORT_DIR = os.path.join(PROJECT_DIR, "llm_testset")
@@ -54,8 +55,11 @@ def export():
     if not test_rows:
         raise RuntimeError("No test files in the manifest - run scripts.make_split first.")
 
-    # Deterministic order so clip ids are stable across re-runs.
+    # Canonical base order, then a seeded shuffle: clip numbering ends up
+    # decorrelated from species (no consecutive same-species blocks that could
+    # bias the LLM by adjacency) while staying reproducible across re-runs.
     test_rows.sort(key=lambda r: (r["species"], r["filename"]))
+    random.Random(RANDOM_SEED).shuffle(test_rows)
 
     if os.path.isdir(EXPORT_DIR):
         shutil.rmtree(EXPORT_DIR)
