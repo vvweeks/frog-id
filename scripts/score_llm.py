@@ -67,10 +67,28 @@ def _load_responses(path):
 
 
 def score(responses_path, answer_key_path):
+    if not os.path.exists(answer_key_path):
+        raise SystemExit(
+            f"Answer key not found: {answer_key_path}\n"
+            f"Run `python -m scripts.export_llm_testset` first.")
+    if not os.path.exists(responses_path):
+        raise SystemExit(
+            f"Response file not found: {responses_path}\n"
+            f"This is the LLM's reply, which you create by hand: give the LLM\n"
+            f"llm_testset/recordings + prompt.txt, save its answer as a CSV\n"
+            f"(lines like 'test_0001,Spring Peeper'), then re-run:\n"
+            f"    python -m scripts.score_llm <that_file.csv>")
+
     with open(answer_key_path, newline="") as f:
         truth = {r["clip_id"]: r["true_common_name"].replace(" ", "_")
                  for r in csv.DictReader(f)}
     responses = _load_responses(responses_path)
+    if not responses:
+        raise SystemExit(
+            f"Parsed 0 answers from {responses_path}. Expected one line per clip\n"
+            f"like 'test_0001,Spring Peeper' (a header row and stray text are fine,\n"
+            f"but each scored line must start with a test_#### id and a species).")
+    print(f"Parsed {len(responses)} answers from {responses_path}.")
     variants = _build_variants()
 
     correct = 0
@@ -131,7 +149,8 @@ def score(responses_path, answer_key_path):
     if unanswered:
         print(f"\n⚠️  {len(unanswered)} recording(s) got no answer from the LLM.")
 
-    out_path = os.path.join(EXPORT_DIR, "scored_results.csv")
+    out_dir = EXPORT_DIR if os.path.isdir(EXPORT_DIR) else "."
+    out_path = os.path.join(out_dir, "scored_results.csv")
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["clip_id", "true", "llm_raw", "matched", "correct"])
         w.writeheader()
