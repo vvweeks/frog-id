@@ -120,26 +120,48 @@ def build_embedding_cache(class_map=None, manifest=None):
 
 
 class BirdNETEmbeddingDataset(Dataset):
-    """Loads pre-cached BirdNET segment embeddings for one manifest split
-    (fast - no audio decoding or model inference at train time)."""
+    """Loads pre-cached BirdNET segment embeddings for one manifest split.
+
+    Multi-clip is a training augmentation: on the TRAIN split each segment is
+    its own sample. On val/test the task is one prediction per recording, so a
+    recording's segments are mean-pooled into a single embedding - one sample
+    per recording (matches the LLM per-recording comparison)."""
 
     def __init__(self, split, class_map):
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(class_map.keys())}
-        self.embedding_paths = []
-        self.labels = []
         self.mean = None   # set via set_normalization() with TRAIN stats
         self.std = None
 
+        multiclip = (split == "train")
+        # Each sample: (list_of_segment_paths, label). Train samples have one
+        # path each; val/test samples hold all of a recording's segments.
+        self.samples = []
+        self.labels = []
         for r in Manifest.load().for_split(split):
             species = r["species"]
             if species not in self.class_to_idx:
                 continue
             prefix = _cache_prefix(species, r["filename"])
-            for i in range(MAX_CLIPS_PER_RECORDING):
-                cache_path = os.path.join(EMBEDDING_CACHE_DIR, f"{prefix}{i}.npy")
-                if os.path.exists(cache_path):
-                    self.embedding_paths.append(cache_path)
-                    self.labels.append(self.class_to_idx[species])
+            seg_paths = [
+                os.path.join(EMBEDDING_CACHE_DIR, f"{prefix}{i}.npy")
+                for i in range(MAX_CLIPS_PER_RECORDING)
+                if os.path.exists(os.path.join(EMBEDDING_CACHE_DIR, f"{prefix}{i}.npy"))
+            ]
+            if not seg_paths:
+                continue
+            label = self.class_to_idx[species]
+            if multiclip:
+                for p in seg_paths:
+                    self.samples.append(([p], label))
+                    self.labels.append(label)
+            else:
+                self.samples.append((seg_paths, label))
+                self.labels.append(label)
+
+    def all_train_vectors(self):
+        """Every individual embedding vector across samples - for fitting
+        normalization stats and reading the embedding dimension."""
+        return np.stack([np.load(p) for paths, _ in self.samples for p in paths]).astype(np.float32)
 
     def set_normalization(self, mean, std):
         """Standardize embeddings with stats fit on the TRAIN split (fit on
@@ -148,10 +170,12 @@ class BirdNETEmbeddingDataset(Dataset):
         self.std = std.astype(np.float32)
 
     def __len__(self):
-        return len(self.embedding_paths)
+        return len(self.samples)
 
     def __getitem__(self, idx):
-        embedding = np.load(self.embedding_paths[idx]).astype(np.float32)
+        paths, label = self.samples[idx]
+        vecs = [np.load(p).astype(np.float32) for p in paths]
+        embedding = vecs[0] if len(vecs) == 1 else np.mean(vecs, axis=0)
         if self.mean is not None:
             embedding = (embedding - self.mean) / self.std
         return torch.from_numpy(embedding), self.labels[idx]

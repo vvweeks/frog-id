@@ -83,6 +83,12 @@ class FrogCallDataset(Dataset):
         self.is_train = (split == "train") if is_train is None else is_train
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(class_map.keys())}
 
+        # Multi-clip is training-data augmentation, so it applies to the train
+        # split only. Val/test get exactly one clip (the peak crop) per
+        # recording - the task there is "ID the frog in this recording", one
+        # prediction per recording, which also matches the LLM comparison.
+        multiclip = (split == "train")
+
         # Each sample: (path, clip_index, n_clips, label)
         self.samples = []
         self.labels = []
@@ -97,6 +103,8 @@ class FrogCallDataset(Dataset):
             if n_clips is None:
                 print(f"[skip - unreadable] {path}")
                 continue
+            if not multiclip:
+                n_clips = 1
             label = self.class_to_idx[species]
             for ci in range(n_clips):
                 self.samples.append((path, ci, n_clips, label))

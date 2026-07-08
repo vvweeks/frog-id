@@ -32,7 +32,7 @@ def train_birdnet_classifier(epochs=50, lr=1e-3, run_id=None, early_stop_patienc
 
     # Standardize embeddings using TRAIN stats only (fit on train, apply to
     # all - no val/test leakage). Helps a linear/MLP head on frozen features.
-    train_embs = np.stack([np.load(p) for p in train_dataset.embedding_paths]).astype(np.float32)
+    train_embs = train_dataset.all_train_vectors()
     emb_mean = train_embs.mean(axis=0)
     emb_std = train_embs.std(axis=0) + 1e-6
     for ds in (train_dataset, val_dataset, test_dataset):
