@@ -30,11 +30,17 @@ def train_model(run_id=None, early_stop_patience=5):
     if len(train_dataset) == 0:
         raise RuntimeError("Training split is empty - run scripts.make_split first.")
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    # Decoding/mel-transforming audio in __getitem__ is the bottleneck; without
+    # worker processes the GPU starves waiting on single-threaded CPU decode.
+    num_workers = min(4, os.cpu_count() or 2)
+    loader_kwargs = dict(num_workers=num_workers, pin_memory=True,
+                         persistent_workers=num_workers > 0)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, **loader_kwargs)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, **loader_kwargs)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, **loader_kwargs)
 
-    print(f"Train: {len(train_dataset)} | Val: {len(val_dataset)} | Test: {len(test_dataset)}")
+    print(f"Train: {len(train_dataset)} | Val: {len(val_dataset)} | Test: {len(test_dataset)} "
+          f"| data workers: {num_workers}")
 
     model = get_frog_model().to(device)
     class_weights = compute_class_weights(train_dataset.labels, NUM_CLASSES).to(device)
