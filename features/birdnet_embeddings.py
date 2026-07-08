@@ -137,6 +137,7 @@ class BirdNETEmbeddingDataset(Dataset):
         # path each; val/test samples hold all of a recording's segments.
         self.samples = []
         self.labels = []
+        self.record_names = []   # source filename per sample (for reporting)
         for r in Manifest.load().for_split(split):
             species = r["species"]
             if species not in self.class_to_idx:
@@ -154,9 +155,11 @@ class BirdNETEmbeddingDataset(Dataset):
                 for p in seg_paths:
                     self.samples.append(([p], label))
                     self.labels.append(label)
+                    self.record_names.append(r["filename"])
             else:
                 self.samples.append((seg_paths, label))
                 self.labels.append(label)
+                self.record_names.append(r["filename"])
 
     def all_train_vectors(self):
         """Every individual embedding vector across samples - for fitting

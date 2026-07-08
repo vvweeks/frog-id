@@ -92,6 +92,7 @@ class FrogCallDataset(Dataset):
         # Each sample: (path, clip_index, n_clips, label)
         self.samples = []
         self.labels = []
+        self.record_names = []   # source filename per sample (for reporting)
         for r in Manifest.load().for_split(split):
             species = r["species"]
             if species not in self.class_to_idx:
@@ -109,6 +110,7 @@ class FrogCallDataset(Dataset):
             for ci in range(n_clips):
                 self.samples.append((path, ci, n_clips, label))
                 self.labels.append(label)
+                self.record_names.append(r["filename"])
 
         self.mel_transform = torchaudio.transforms.MelSpectrogram(
             sample_rate=SAMPLE_RATE, n_mels=128, n_fft=1024,
