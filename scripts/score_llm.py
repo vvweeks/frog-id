@@ -17,9 +17,13 @@ Run:  python -m scripts.score_llm <llm_responses.csv> [--answer-key path]
 import argparse
 import csv
 import os
+import re
 from collections import defaultdict
 
 from config import SPECIES_MAP, SPECIES_SYNONYMS, PROJECT_DIR
+
+# Matches a clip id however the LLM writes it: test_1, test_0001, Test 12, etc.
+_CLIP_RE = re.compile(r"test[_\s-]*0*(\d+)", re.IGNORECASE)
 
 EXPORT_DIR = os.path.join(PROJECT_DIR, "llm_testset")
 AMBIGUOUS, UNMATCHED = "<ambiguous>", "<unmatched>"
@@ -52,17 +56,25 @@ def match_species(answer, variants):
 
 
 def _load_responses(path):
-    """Lenient parse: keep rows whose first cell looks like test_#### and that
-    have a second cell. Tolerates headers and stray lines."""
+    """Very lenient parse of whatever the LLM returned. Finds every 'test_####'
+    id anywhere in the text and takes the species as the text right after it,
+    up to the next id / newline / table pipe. Handles CSV, markdown tables,
+    'test_0001: Spring Peeper', trailing '.mp3', unpadded ids, and prose.
+    Ids are normalized to the zero-padded form (test_1 -> test_0001)."""
+    with open(path, encoding="utf-8-sig") as f:   # utf-8-sig drops a BOM if present
+        text = f.read()
+
     responses = {}
-    with open(path, newline="") as f:
-        for row in csv.reader(f):
-            if len(row) < 2:
-                continue
-            clip_id = row[0].strip()
-            if not clip_id.lower().startswith("test_"):
-                continue
-            responses[clip_id] = row[1].strip()
+    matches = list(_CLIP_RE.finditer(text))
+    for i, m in enumerate(matches):
+        clip_id = f"test_{int(m.group(1)):04d}"
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        segment = text[m.end():end]
+        segment = re.sub(r"^\.(mp3|wav)", "", segment, flags=re.IGNORECASE)  # drop extension
+        segment = segment.strip().lstrip(":,-–—|\t ").strip()               # drop separators
+        species = re.split(r"[\n|\t]", segment)[0].strip().strip("*,|").strip()
+        if species:
+            responses[clip_id] = species
     return responses
 
 
